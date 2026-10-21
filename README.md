@@ -45,6 +45,6 @@ node tools/extension-market/cli.mjs pack extensions/official/agent-connectors --
 
 ## 实际界面
 
-![Windows 中的独立外部 Agent 设置页面](screenshots/settings-windows.png)
+![Windows 中的独立外部 Agent 设置页面](screenshots/settings-windows.jpg)
 
 截图来自 Windows 原生 MewuAI 1.0.4 候选程序，插件版本 0.1.2。连接检测不等于账户已登录或模型调用已通过。
