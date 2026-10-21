@@ -1,0 +1,6 @@
+.env
+.private/
+node_modules/
+agent.md
+AGENTS.md
+*.zip
