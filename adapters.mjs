@@ -15,7 +15,7 @@ export async function connectCodex(ctx,config){
     await peer.request('initialize',{clientInfo:{name:'mewu_agent_connectors',title:'Mewu',version:'0.1.0'}});
     await peer.send({method:'initialized',params:{}});
     const account=await peer.request('account/read',{refreshToken:false});
-    if(!account.account)throw Error('请先在 Codex 官方客户端登录');
+    if(!account.account&&account.requiresOpenaiAuth!==false)throw Error('请先在 Codex 官方客户端登录');
     const models=[];let cursor=null;
     for(let page=0;page<8;page++){
       const result=await peer.request('model/list',{limit:100,includeHidden:false,cursor});
@@ -35,14 +35,15 @@ export async function runCodex(ctx,config,input,session,checkpoint=async()=>{}){
       if(!/^[a-zA-Z0-9_-]+$/.test(name))throw Error('Codex MCP 名称不支持隔离');
       configOverrides[`mcp_servers.${name}.enabled`]=false;
     }
-    const options={cwd:peer.cwd,...(config.model?{model:config.model}:{}),approvalPolicy:'on-request',sandbox:'read-only',config:configOverrides,developerInstructions:soul(input)};
+    const model=config.model||models.find(value=>value.default)?.id;
+    const options={cwd:peer.cwd,...(model?{model}:{}),approvalPolicy:'on-request',sandbox:'read-only',config:configOverrides,developerInstructions:soul(input)};
     const resumed=Boolean(session?.id);
     const thread=await peer.request(resumed?'thread/resume':'thread/start',resumed?{...options,threadId:session.id}:{...options,ephemeral:false});
     const threadId=thread.thread?.id;if(typeof threadId!=='string'||!threadId)throw Error('Codex 未返回会话标识');
     await checkpoint({id:threadId});
     const content=[{type:'text',text:textInput(input,resumed)}],bindings=[];
     const images=imagesForTurn(input,resumed);
-    if(images.length&&config.model&&!models.find(m=>m.id===config.model)?.image)throw Error('所选 Codex 模型不支持图片');
+    if(images.length&&model&&!models.find(m=>m.id===model)?.image)throw Error('所选 Codex 模型不支持图片');
     for(const frameId of images){const index=content.length;content.push({type:'image',url:null});bindings.push({frameId,pointer:`/params/input/${index}/url`,encoding:'dataUrl'});}
     let answer='',reasoning='',completed,turnId;
     const early=[];
@@ -85,17 +86,32 @@ export async function connectAcp(ctx,config,previous){
     return {peer,initialized,session,models,resumed};
   }catch(error){await peer.close();throw error;}
 }
+export async function selectAcpModel(connection,model){
+  if(!model)return;
+  const {peer,session,models}=connection;
+  if(!models.some(value=>value.id===model))throw Error('该 Agent 未提供所选模型');
+  const option=session.configOptions?.find(value=>value.category==='model');
+  // Some clients reject even a redundant model change. The advertised current
+  // selection already satisfies the request; do not mutate it unnecessarily.
+  if((option?.currentValue??session.models?.currentModelId)===model)return;
+  try{
+    const result=option
+      ?await peer.request('session/set_config_option',{sessionId:session.sessionId,configId:option.id,value:model})
+      :await peer.request('session/set_model',{sessionId:session.sessionId,modelId:model});
+    const current=result.configOptions?.find(value=>value.category==='model')?.currentValue;
+    if(current!==undefined&&current!==model)throw Error('selection not applied');
+  }catch{
+    // Never leak an upstream error body (which can contain credentials/paths),
+    // silently switch models or retry a prompt after an uncertain failure.
+    throw Error('该 Agent 无法切换到所选模型，请选择默认模型或更新官方客户端');
+  }
+}
 export async function runAcp(ctx,config,input,previous,checkpoint=async()=>{}){
   const {peer,initialized,session,models,resumed}=await connectAcp(ctx,config,previous);
   try{
     const sessionId=session.sessionId;
     await checkpoint({id:sessionId});
-    if(config.model){
-      const option=session.configOptions?.find(v=>v.category==='model');
-      if(option)await peer.request('session/set_config_option',{sessionId,configId:option.id,value:config.model});
-      else if(models.some(m=>m.id===config.model))await peer.request('session/set_model',{sessionId,modelId:config.model});
-      else throw Error('该 Agent 未提供所选模型');
-    }
+    await selectAcpModel({peer,session,models},config.model);
     const images=imagesForTurn(input,resumed);
     if(images.length&&initialized.agentCapabilities?.promptCapabilities?.image!==true)throw Error('该 Agent 未声明图片支持');
     const context=resumed&&soul(input)?`[Mewu 角色设定]\n${soul(input)}\n\n`:'';
