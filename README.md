@@ -4,6 +4,8 @@
 
 协议、安装路径规则、配置页面、模型查询、会话恢复和消息转换都在本插件中。宿主只提供设置插槽、隔离配置、受控的本机进程及 JSON 行通信；不包含这些平台的专用适配分支。对话条内的引擎与模型选择需要 Mewu 1.0.10 或更新版本；旧宿主仍可在 Agent 设置中绑定引擎。
 
+Linux AppImage 用户请更新至 Mewu 1.0.11 或更高版本，避免宿主的私有 Python/动态库路径影响官方客户端。插件按模型目录校验 Codex 思考程度，并把输入框自动大写造成的 `Low` 匹配为服务实际公布的 `low`；不支持的选项会在发送任务前明确拒绝。
+
 ## 使用
 
 1. 安装插件，打开设置 → 外部 Agent。
@@ -41,7 +43,7 @@
 入口为 `index.mjs`，无需 Node 依赖随插件安装。使用项目 SDK 打包器生成安装 ZIP，README 和测试文件不放入运行包。
 
 ```sh
-node tools/extension-market/cli.mjs pack extensions/official/agent-connectors --out out/agent-connectors-0.1.6.zip --file profiles.mjs --file rpc.mjs --file adapters.mjs --file view.mjs --file workbuddy.mjs --file catalog.mjs --validator /path/to/mewu-plugin-validator
+node tools/extension-market/cli.mjs pack extensions/official/agent-connectors --out out/agent-connectors-0.1.7.zip --file profiles.mjs --file rpc.mjs --file adapters.mjs --file view.mjs --file workbuddy.mjs --file catalog.mjs --validator /path/to/mewu-plugin-validator
 ```
 
 一手参考：[ACP v1](https://agentclientprotocol.com/protocol/v1/overview)、[Codex App Server](https://developers.openai.com/codex/app-server)、[MiniMax Code](https://github.com/MiniMax-AI/minimax-code)、[CodeBuddy ACP](https://www.codebuddy.ai/docs/cli/acp)、[Hermes ACP](https://hermes-agent.nousresearch.com/docs/user-guide/features/acp/)。
