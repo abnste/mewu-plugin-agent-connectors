@@ -24,6 +24,8 @@ Linux AppImage 用户请更新至 Mewu 1.0.11 或更高版本，避免宿主的�
 | Codex | `codex app-server --listen stdio://` | 官方客户端登录、账户与模型检测，持久线程恢复。默认采用只读 sandbox。 |
 | MiniMax Code | `mcode acp` | 官方 CLI 的 ACP 服务；不将桌面应用的私有令牌接口冒充正式 Agent 协议。 |
 | WorkBuddy / CodeBuddy | 桌面内置 `--serve` HTTP ACP；或 `codebuddy --acp` | 自动检测桌面程序及 CLI，桥接逻辑完全在插件里。需要使用对应官方客户端/CLI 的登录。 |
+
+WorkBuddy 桌面桥接同时接受 ACP 的 `application/json` 单次响应和 `text/event-stream` 流式响应，避免单次响应被当成空 SSE 丢弃而导致连接失败。
 | Hermes | `hermes acp` | 需要安装 ACP 支持；沿用 Hermes 的身份、记忆、技能和模型配置。 |
 
 配置全插件共享；会话按角色、Mewu 会话及连接配置隔离。支持恢复时复用远端会话；不支持时发送 Mewu 已投影的对话历史。每轮进程归该调用所有，结束、取消或插件撤权会关闭。图片通过本轮原生素材句柄注入协议消息，不允许插件传入任意本机图片路径。
