@@ -14,6 +14,32 @@ export const bootstrap=String.raw`
 const http=require('node:http'),net=require('node:net'),readline=require('node:readline'),{spawn}=require('node:child_process');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),crypto=require('node:crypto');
 const config=JSON.parse(process.argv[1]);let child,port,connection,stopped=false,managed,control;
+let leaseServer;const leaseSockets=new Set();
+const closeLease=()=>{for(const socket of leaseSockets)socket.destroy();leaseServer?.close();};
+async function createLease(){
+ const token=crypto.randomBytes(32).toString('hex');
+ leaseServer=net.createServer(socket=>{
+  leaseSockets.add(socket);socket.on('close',()=>leaseSockets.delete(socket));socket.on('error',()=>{});
+  socket.setTimeout(5000,()=>socket.destroy());let input='';
+  socket.on('data',chunk=>{input+=chunk;if(input.length>128)return socket.destroy();if(input.includes('\n')){if(input!==token+'\n'||stopped)return socket.destroy();socket.setTimeout(0);socket.write('ok\n');}});
+ });
+ await new Promise((resolve,reject)=>{leaseServer.once('error',reject);leaseServer.listen(0,'127.0.0.1',resolve);});
+ if(stopped){closeLease();throw Error('Connection closed');}
+ return {port:leaseServer.address().port,token};
+}
+// Run the bundled CLI in this process, so even a forced bridge termination
+// closes its lifetime lease and exits the desktop-owned runtime immediately.
+function managedEntrypoint(){
+ const net=require('node:net'),{pathToFileURL}=require('node:url');
+ const value=JSON.parse(process.argv[1]);let started=false,buffer='';
+ const socket=net.connect({host:'127.0.0.1',port:value.lease.port});
+ socket.setTimeout(5000,()=>process.exit(1));socket.on('error',()=>process.exit(started?0:1));socket.on('close',()=>process.exit(0));
+ socket.on('connect',()=>socket.write(value.lease.token+'\n'));
+ socket.on('data',chunk=>{if(started)return;buffer+=chunk;if(buffer.length>32)process.exit(1);if(buffer==='ok\n'){
+  started=true;socket.setTimeout(0);process.argv=[process.execPath,value.cli,...value.args];
+  import(pathToFileURL(value.cli).href).catch(()=>process.exit(1));
+ }});
+}
 const calls=new Set();
 const desktopCall=(method,params={})=>new Promise((resolve,reject)=>{
  const socket=net.connect(control);let buffer='',settled=false;
@@ -40,7 +66,9 @@ async function startManagedDesktop(){
  // handshake delivers the credential bootstrap; the plugin never reads keys.
  const sessionId=crypto.randomUUID();
  managed={sessionId};
- const result=await desktopCall('session.create',{sessionId,command:process.execPath,args:[config.cli,...config.args.filter(arg=>arg!=='--acp'),'--serve','--host','127.0.0.1'],cwd:process.cwd(),env:{...process.env,CODEBUDDY_CONFIG_DIR:root,WORKBUDDY_CONFIG_DIR:root,...(record.epochAddress?{SANDBOX_CENTER_IPC_ADDRESS:record.epochAddress}:{})},port:0,cols:80,rows:24});
+ const lease=await createLease();
+ const args=['--eval','('+managedEntrypoint.toString()+')()',JSON.stringify({cli:config.cli,args:[...config.args.filter(arg=>arg!=='--acp'),'--serve','--host','127.0.0.1'],lease})];
+ const result=await desktopCall('session.create',{sessionId,command:process.execPath,args,cwd:process.cwd(),env:{...process.env,CODEBUDDY_CONFIG_DIR:root,WORKBUDDY_CONFIG_DIR:root,...(record.epochAddress?{SANDBOX_CENTER_IPC_ADDRESS:record.epochAddress}:{})},port:0,cols:80,rows:24});
  if(result?.sessionId!==sessionId||!Number.isInteger(result.pid)||typeof result.runtimeId!=='string')throw Error('Invalid desktop session');
  managed.runtimeId=result.runtimeId;
  const endpoint=new URL(result.acpEndpoint);
@@ -73,10 +101,10 @@ const ready=(async()=>{
  child.stdout.resume();child.stderr.resume();let exited=false;child.once('exit',()=>{exited=true;});child.once('error',()=>{exited=true;});
  const until=Date.now()+24000;while(Date.now()<until&&!exited&&!stopped){try{const value=await request('POST','/api/v1/acp/connect');if(typeof value?.connectionId==='string'&&value.connectionId){connection=value.connectionId;return;}}catch{}await new Promise(resolve=>setTimeout(resolve,150));}
  throw Error('WorkBuddy desktop connection failed');
-})();ready.catch(()=>{});
+})();ready.catch(()=>{closeLease();});
 const input=readline.createInterface({input:process.stdin,crlfDelay:Infinity});
 input.on('line',line=>{let value;try{if(Buffer.byteLength(line)>16777216)throw Error();value=JSON.parse(line);}catch{process.exitCode=1;input.close();return;}
  void(async()=>{await ready;let answered=false;await request('POST','/api/v1/acp',value,message=>{if(value.method!==undefined&&message.id===value.id&&Object.hasOwn(message,'result')||message.id===value.id&&Object.hasOwn(message,'error'))answered=true;output(message);});if(value.method!==undefined&&value.id!==undefined&&!answered)throw Error('WorkBuddy response missing');})().catch(()=>{if(value.id!==undefined&&value.method!==undefined)output({jsonrpc:'2.0',id:value.id,error:{code:-32603,message:'WorkBuddy desktop request failed'}});});
 });
-input.on('close',()=>{stopped=true;for(const call of calls)call.destroy();child?.kill();if(managed){void ready.catch(()=>{}).then(()=>managed.runtimeId?desktopCall('session.kill',{sessionId:managed.sessionId,expectedRuntimeId:managed.runtimeId}):undefined).catch(()=>{}).finally(()=>process.exit(0));setTimeout(()=>process.exit(0),65000).unref();}else setTimeout(()=>process.exit(0),200).unref();});
+input.on('close',()=>{stopped=true;closeLease();for(const call of calls)call.destroy();child?.kill();if(managed){void ready.catch(()=>{}).then(()=>managed.runtimeId?desktopCall('session.kill',{sessionId:managed.sessionId,expectedRuntimeId:managed.runtimeId}):undefined).catch(()=>{}).finally(()=>process.exit(0));setTimeout(()=>process.exit(0),65000).unref();}else setTimeout(()=>process.exit(0),200).unref();});
 `;

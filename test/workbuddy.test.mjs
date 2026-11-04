@@ -53,6 +53,7 @@ test('desktop bridge forwards unary JSON results/errors and streaming SSE', {tim
 test('desktop sidecar owns credential bootstrap and only the bridge session is closed', {timeout:15000},async t=>{
  const dir=await mkdtemp(join(tmpdir(),'workbuddy-managed-'));
  const root=join(dir,'config'),hash=(s,n)=>createHash('sha1').update(s).digest('hex').slice(0,n);
+ await writeFile(join(dir,'bundled-cli'),"console.log('runtime-ready');setInterval(()=>{},1000);");
  const instance=hash(root,12),uid=process.getuid?.(),base=join(dir,uid===undefined?'wb':'wb-'+hash(String(uid),6),instance);
  await mkdir(base,{recursive:true});
  const uuid='1234abcd',socketPath=process.platform==='win32'?'\\\\.\\pipe\\workbuddy-'+instance+'-sidecar-control-'+uuid:join(base,'sidecar-'+uuid+'.sock');
@@ -77,9 +78,27 @@ test('desktop sidecar owns credential bootstrap and only the bridge session is c
  child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:1,method:'initialize',params:{}})+'\n');
  assert.deepEqual(await response,{jsonrpc:'2.0',id:1,result:{protocolVersion:1}});
  assert.equal(created.port,0);assert.equal(created.command,process.execPath);
- assert.deepEqual(created.args,[join(dir,'bundled-cli'),'--serve','--host','127.0.0.1']);
+ assert.equal(created.args[0],'--eval');
+ const launch=JSON.parse(created.args[2]);
+ assert.equal(launch.cli,join(dir,'bundled-cli'));assert.deepEqual(launch.args,['--serve','--host','127.0.0.1']);
+ const runtime=spawn(process.execPath,created.args,{stdio:['ignore','pipe','pipe'],windowsHide:true});
+ const runtimeExit=new Promise(resolve=>runtime.once('exit',resolve));
+ t.after(()=>runtime.kill());
+ assert.match(String(await new Promise(resolve=>runtime.stdout.once('data',resolve))),/runtime-ready/);
  child.stdin.end();await exit;
+ assert.equal(await runtimeExit,0);
  assert.deepEqual(killed,{sessionId:created.sessionId,expectedRuntimeId:'owned-runtime'});
+ // The native host can terminate a protocol child without delivering EOF.
+ // Its leased desktop process must still exit, even though cleanup RPC cannot run.
+ const abrupt=spawn(process.execPath,config.args,{env:{...process.env,TEMP:dir,TMP:dir,TMPDIR:dir,XDG_RUNTIME_DIR:'',CODEBUDDY_CONFIG_DIR:root,WORKBUDDY_CONFIG_DIR:root},stdio:['pipe','pipe','pipe'],windowsHide:true});
+ const abruptExit=new Promise(resolve=>abrupt.once('exit',resolve));
+ t.after(()=>abrupt.kill());
+ const abruptReply=new Promise(resolve=>createInterface({input:abrupt.stdout}).once('line',resolve));
+ abrupt.stdin.write(JSON.stringify({jsonrpc:'2.0',id:4,method:'initialize',params:{}})+'\n');await abruptReply;
+ const orphan=spawn(process.execPath,created.args,{stdio:['ignore','pipe','pipe'],windowsHide:true});
+ const orphanExit=new Promise(resolve=>orphan.once('exit',resolve));t.after(()=>orphan.kill());
+ await new Promise(resolve=>orphan.stdout.once('data',resolve));
+ abrupt.kill('SIGKILL');await abruptExit;assert.equal(await orphanExit,0);
  wrongIdentity=true;created=undefined;killed=undefined;
  const rejected=spawn(process.execPath,config.args,{env:{...process.env,TEMP:dir,TMP:dir,TMPDIR:dir,XDG_RUNTIME_DIR:'',CODEBUDDY_CONFIG_DIR:root,WORKBUDDY_CONFIG_DIR:root},stdio:['pipe','pipe','pipe'],windowsHide:true});
  const rejectedExit=new Promise(resolve=>rejected.once('exit',resolve));
